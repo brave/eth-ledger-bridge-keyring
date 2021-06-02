@@ -1,13 +1,14 @@
 {
   "name": "@metamask/eth-ledger-bridge-keyring",
   "version": "0.5.0",
-  "description": "A MetaMask compatible keyring, for ledger hardware wallets",
+  "description": "A Brave Ethereum Remote Client compatible keyring, for ledger hardware wallets",
   "main": "index.js",
   "files": [
-    "index.js"
+    "index.js",
+    "ledger-bridge.js"
   ],
   "engines": {
-    "node": ">=12.0.0"
+    "node": ">=10.16.0"
   },
   "scripts": {
     "test": "mocha",
@@ -20,7 +21,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/MetaMask/eth-ledger-bridge-keyring.git"
+    "url": "git+https://github.com/brave/eth-ledger-bridge-keyring.git"
   },
   "keywords": [
     "ethereum",
@@ -31,13 +32,16 @@
   "author": "Bruno Barbieri",
   "license": "ISC",
   "bugs": {
-    "url": "https://github.com/MetaMask/eth-ledger-bridge-keyring/issues"
+    "url": "https://github.com/brave/eth-ledger-bridge-keyring/issues"
   },
-  "homepage": "https://github.com/MetaMask/eth-ledger-bridge-keyring#readme",
+  "homepage": "https://github.com/brave/eth-ledger-bridge-keyring#readme",
   "resolutions": {
     "mocha/**/mkdirp": "^0.5.3"
   },
   "dependencies": {
+    "@ledgerhq/hw-app-eth": "^5.53.0",
+    "@ledgerhq/hw-transport-http": "^5.53.0",
+    "@ledgerhq/hw-transport-webhid": "^5.51.1",
     "eth-sig-util": "^2.0.0",
     "ethereumjs-tx": "^1.3.4",
     "ethereumjs-util": "^7.0.9",

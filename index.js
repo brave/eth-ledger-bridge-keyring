@@ -1,13 +1,14 @@
+/* global chrome */
+
 const { EventEmitter } = require('events')
 const HDKey = require('hdkey')
 const ethUtil = require('ethereumjs-util')
 const sigUtil = require('eth-sig-util')
+const LedgerBridge = require('./ledger-bridge')
 
 const pathBase = 'm'
 const hdPathString = `${pathBase}/44'/60'/0'`
 const type = 'Ledger Hardware'
-
-const BRIDGE_URL = 'https://metamask.github.io/eth-ledger-bridge-keyring'
 
 const MAX_INDEX = 1000
 const NETWORK_API_URLS = {
@@ -17,24 +18,142 @@ const NETWORK_API_URLS = {
   mainnet: 'https://api.etherscan.io',
 }
 
+class HIDDevice {
+  constructor (adapter, productId, deviceId) {
+    this.adapter = adapter
+    this.productId = productId
+    this.deviceId = deviceId
+    this.inputReportListeners = []
+  }
+
+  poll () {
+    chrome.hid.receive(this.connectionId, (reportId, data) => {
+      this.inputReportListeners.forEach((cb) => {
+        cb({ reportId, data: new Uint8Array(data) })
+      })
+      if (this.polling) {
+        this.poll()
+      }
+    })
+  }
+
+  open () {
+    return new Promise((resolve) => {
+      chrome.hid.connect(this.deviceId, (info) => {
+        this.connectionId = info.connectionId
+        this.adapter.connectedListeners.forEach((cb) => {
+          cb(this)
+        })
+        this.polling = true
+        this.poll()
+        resolve()
+      })
+    })
+  }
+
+  close () {
+    this.polling = false
+    return new Promise((resolve) => {
+      chrome.hid.disconnect(this.connectionId, () => {
+        this.adapter.disconnectedListeners.forEach((cb) => {
+          cb(this)
+        })
+        delete this.connectionId
+        resolve()
+      })
+    })
+  }
+
+  sendReport (reportId, data) {
+    return new Promise((resolve) => {
+      chrome.hid.send(this.connectionId, reportId, data.buffer, () => {
+       resolve()
+      })
+    })
+  }
+
+  addEventListener (eventName, cb) {
+    if (eventName === 'inputreport') {
+      this.inputReportListeners.push(cb)
+    }
+  }
+
+  removeEventListener (eventName, cb) {
+    if (eventName === 'inputreport') {
+      const idx = this.inputReportListeners.indexOf(cb)
+      if (idx !== -1) {
+        this.inputReportListeners.splice(idx, 1)
+      }
+    }
+  }
+
+}
+
+// webhid adapter for making chrome.hid work like navigator.hid
+class WEBHIDAdapter {
+
+  constructor () {
+    this.connectedListeners = []
+    this.disconnectedListeners = []
+  }
+
+  requestDevice (deviceOptionsVal) {
+    return new Promise((resolve) => {
+      const deviceOptions = deviceOptionsVal || { filters: [] }
+      chrome.hid.getDevices(deviceOptions, (hidDeviceInfoList) => {
+        const devices = hidDeviceInfoList.map((info) => new HIDDevice(this, info.productId, info.deviceId))
+        resolve(devices)
+      })
+    })
+  }
+
+  getDevices () {
+    return this.requestDevice()
+  }
+
+  removeEventListener (eventName, cb) {
+    if (eventName === 'connected') {
+      const idx = this.connectedListeners.indexOf(cb)
+      if (idx !== -1) {
+        this.connectedListeners.splice(idx, 1)
+      }
+    } else if (eventName === 'disconnected') {
+      const idx = this.disconnectedListeners.indexOf(cb)
+      if (idx !== -1) {
+        this.disconnectedListeners.splice(idx, 1)
+      }
+    }
+  }
+
+  addEventListener (eventName, cb) {
+    if (eventName === 'connected') {
+      this.connectedListeners.push(cb)
+    } else if (eventName === 'disconnected') {
+      this.disconnectedListeners.push(cb)
+    }
+  }
+}
+
+navigator.hid = Object.defineProperty(navigator, 'hid', {
+  value: new WEBHIDAdapter()
+})
+
+const ledgerBridge = new LedgerBridge()
+
 class LedgerBridgeKeyring extends EventEmitter {
   constructor (opts = {}) {
     super()
     this.accountDetails = {}
-    this.bridgeUrl = null
     this.type = type
     this.page = 0
     this.perPage = 5
     this.unlockedAccount = 0
     this.hdk = new HDKey()
     this.paths = {}
-    this.iframe = null
     this.network = 'mainnet'
     this.implementFullBIP44 = false
     this.deserialize(opts)
 
-    this.iframeLoaded = false
-    this._setupIframe()
   }
 
   serialize () {
@@ -42,14 +161,12 @@ class LedgerBridgeKeyring extends EventEmitter {
       hdPath: this.hdPath,
       accounts: this.accounts,
       accountDetails: this.accountDetails,
-      bridgeUrl: this.bridgeUrl,
       implementFullBIP44: false,
     })
   }
 
   deserialize (opts = {}) {
     this.hdPath = opts.hdPath || hdPathString
-    this.bridgeUrl = opts.bridgeUrl || BRIDGE_URL
     this.accounts = opts.accounts || []
     this.accountDetails = opts.accountDetails || {}
     if (!opts.accountDetails) {
@@ -114,13 +231,13 @@ class LedgerBridgeKeyring extends EventEmitter {
     }
     const path = hdPath ? this._toLedgerPath(hdPath) : this.hdPath
     return new Promise((resolve, reject) => {
-      this._sendMessage({
+      ledgerBridge.request({
         action: 'ledger-unlock',
         params: {
           hdPath: path,
         },
       },
-      ({ success, payload }) => {
+      (success, payload) => {
         if (success) {
           this.hdk.publicKey = Buffer.from(payload.publicKey, 'hex')
           this.hdk.chainCode = Buffer.from(payload.chainCode, 'hex')
@@ -192,21 +309,10 @@ class LedgerBridgeKeyring extends EventEmitter {
 
   updateTransportMethod (useLedgerLive = false) {
     return new Promise((resolve, reject) => {
-      // If the iframe isn't loaded yet, let's store the desired useLedgerLive value and
-      // optimistically return a successful promise
-      if (!this.iframeLoaded) {
-        this.delayedPromise = {
-          resolve,
-          reject,
-          useLedgerLive,
-        }
-        return
-      }
-
-      this._sendMessage({
+      ledgerBridge.request({
         action: 'ledger-update-transport',
         params: { useLedgerLive },
-      }, ({ success }) => {
+      }, (success) => {
         if (success) {
           resolve(true)
         } else {
@@ -225,7 +331,7 @@ class LedgerBridgeKeyring extends EventEmitter {
           tx.r = '0x00'
           tx.s = '0x00'
 
-          this._sendMessage({
+          ledgerBridge.request({
             action: 'ledger-sign-transaction',
             params: {
               tx: tx.serialize().toString('hex'),
@@ -233,7 +339,7 @@ class LedgerBridgeKeyring extends EventEmitter {
               to: ethUtil.bufferToHex(tx.to).toLowerCase(),
             },
           },
-          ({ success, payload }) => {
+          (success, payload) => {
             if (success) {
 
               tx.v = Buffer.from(payload.v, 'hex')
@@ -264,14 +370,15 @@ class LedgerBridgeKeyring extends EventEmitter {
     return new Promise((resolve, reject) => {
       this.unlockAccountByAddress(withAccount)
         .then((hdPath) => {
-          this._sendMessage({
+
+          ledgerBridge.request({
             action: 'ledger-sign-personal-message',
             params: {
               hdPath,
               message: ethUtil.stripHexPrefix(message),
             },
           },
-          ({ success, payload }) => {
+          (success, payload) => {
             if (success) {
               let v = payload.v - 27
               v = v.toString(16)
@@ -326,7 +433,7 @@ class LedgerBridgeKeyring extends EventEmitter {
 
     const hdPath = await this.unlockAccountByAddress(withAccount)
     const { success, payload } = await new Promise((resolve) => {
-      this._sendMessage({
+      ledgerBridge.request({
         action: 'ledger-sign-typed-data',
         params: {
           hdPath,
@@ -371,55 +478,6 @@ class LedgerBridgeKeyring extends EventEmitter {
   }
 
   /* PRIVATE METHODS */
-
-  _setupIframe () {
-    this.iframe = document.createElement('iframe')
-    this.iframe.src = this.bridgeUrl
-    this.iframe.onload = async () => {
-      // If the ledger live preference was set before the iframe is loaded,
-      // set it after the iframe has loaded
-      this.iframeLoaded = true
-      if (this.delayedPromise) {
-        try {
-          const result = await this.updateTransportMethod(
-            this.delayedPromise.useLedgerLive,
-          )
-          this.delayedPromise.resolve(result)
-        } catch (e) {
-          this.delayedPromise.reject(e)
-        } finally {
-          delete this.delayedPromise
-        }
-      }
-    }
-    document.head.appendChild(this.iframe)
-  }
-
-  _getOrigin () {
-    const tmp = this.bridgeUrl.split('/')
-    tmp.splice(-1, 1)
-    return tmp.join('/')
-  }
-
-  _sendMessage (msg, cb) {
-    msg.target = 'LEDGER-IFRAME'
-    this.iframe.contentWindow.postMessage(msg, '*')
-    const eventListener = ({ origin, data }) => {
-      if (origin !== this._getOrigin()) {
-        return false
-      }
-
-      if (data && data.action && data.action === `${msg.action}-reply` && cb) {
-        cb(data)
-        return undefined
-      }
-
-      window.removeEventListener('message', eventListener)
-      return undefined
-    }
-    window.addEventListener('message', eventListener)
-  }
-
   async __getPage (increment) {
 
     this.page += increment
