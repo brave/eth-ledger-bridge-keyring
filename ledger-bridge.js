@@ -1,7 +1,7 @@
 'use strict'
 require('buffer')
 
-import TransportU2F from '@ledgerhq/hw-transport-u2f'
+import TransportHID from '@ledgerhq/hw-transport-webhid'
 import LedgerEth from '@ledgerhq/hw-app-eth'
 import { byContractAddress } from '@ledgerhq/hw-app-eth/erc20'
 import WebSocketTransport from '@ledgerhq/hw-transport-http/lib/WebSocketTransport'
@@ -86,7 +86,7 @@ export default class LedgerBridge {
                 }
             }
             else {
-                this.transport = await TransportU2F.create()
+                this.transport = await TransportHID.create()
                 this.app = new LedgerEth(this.transport)
             }
         } catch (e) {
