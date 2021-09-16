@@ -1,7 +1,5 @@
 const TransportWebHID = require('@ledgerhq/hw-transport-webhid').default
 const LedgerEth = require('@ledgerhq/hw-app-eth').default
-const HWAppEth = require('@ledgerhq/hw-app-eth/erc20')
-const byContractAddress = HWAppEth.byContractAddress
 const WebSocketTransport = require('@ledgerhq/hw-transport-http/lib/WebSocketTransport').default
 
 'use strict'
@@ -26,7 +24,7 @@ module.exports = class LedgerBridge {
         this.unlock(cb, params.hdPath)
         break
       case 'ledger-sign-transaction':
-        this.signTransaction(cb, params.hdPath, params.tx, params.to)
+        this.signTransaction(cb, params.hdPath, params.tx)
         break
       case 'ledger-sign-personal-message':
         this.signPersonalMessage(cb, params.hdPath, params.message)
@@ -119,15 +117,9 @@ module.exports = class LedgerBridge {
     }
   }
 
-  async signTransaction (cb, hdPath, tx, to) {
+  async signTransaction (cb, hdPath, tx) {
     try {
       await this.makeApp()
-      if (to) {
-        const isKnownERC20Token = byContractAddress(to)
-        if (isKnownERC20Token) {
-          await this.app.provideERC20TokenInformation(isKnownERC20Token)
-        }
-      }
       const res = await this.app.signTransaction(hdPath, tx)
       cb(true, res)
     } catch (err) {
