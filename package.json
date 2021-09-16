@@ -41,7 +41,7 @@
   },
   "dependencies": {
     "@ethereumjs/tx": "^3.3.0",
-    "@ledgerhq/hw-app-eth": "^5.53.0",
+    "@ledgerhq/hw-app-eth": "^6.6.0",
     "@ledgerhq/hw-transport-http": "^5.53.0",
     "@ledgerhq/hw-transport-webhid": "^5.51.1",
     "eth-sig-util": "^3.0.1",
