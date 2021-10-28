@@ -490,7 +490,7 @@ class LedgerBridgeKeyring extends EventEmitter {
           hashStructMessageHex,
         },
       },
-      (result) => resolve(result))
+      (s, p) => resolve({ success: s, payload: p }))
     })
 
     if (success) {
